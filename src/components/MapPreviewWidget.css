@@ -1,0 +1,175 @@
+/* MapPreviewWidget.css */
+
+.map-preview-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 180px;
+    height: 180px;
+    background: rgba(10, 10, 10, 0.95);
+    /* Dark glass */
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    z-index: 1000;
+    /* Above camera feed */
+    transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+    /* smooth expand */
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Mobile specific override */
+@media (max-width: 768px) {
+    .map-preview-container {
+        width: 140px;
+        height: 140px;
+        bottom: 120px;
+        /* Above status bar, adjust based on HUD */
+        right: 20px;
+    }
+}
+
+/* Fullscreen Mode */
+.map-preview-container.fullscreen {
+    inset: 0;
+    width: 100vw !important;
+    height: 100vh !important;
+    border-radius: 0;
+    border: none;
+    background: rgba(0, 0, 0, 0.98);
+    /* Increased opacity for focus */
+    z-index: 9999;
+    /* Top level */
+    bottom: 0 !important;
+    right: 0 !important;
+    cursor: default;
+}
+
+/* Map specific styling */
+.leaflet-container {
+    width: 100% !important;
+    height: 100% !important;
+    background: transparent !important;
+    /* Let container background show */
+}
+
+/* Controls */
+.map-controls {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 10000;
+    /* Above map */
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+}
+
+.map-preview-container:hover .map-controls,
+.map-preview-container.fullscreen .map-controls {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.control-btn {
+    background: rgba(20, 20, 20, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.2s;
+}
+
+.control-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: scale(1.1);
+}
+
+/* Navigation Info Overlay (Fullscreen Only) */
+.nav-info-overlay {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    right: 60px;
+    /* Space for close btn */
+    padding: 15px;
+    background: rgba(10, 15, 30, 0.85);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    z-index: 10000;
+    color: #fff;
+    opacity: 0;
+    transform: translateY(-20px);
+    transition: all 0.3s ease 0.1s;
+    /* Slight delay */
+    pointer-events: none;
+}
+
+.map-preview-container.fullscreen .nav-info-overlay {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.instruction-text {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #00e5ff;
+    margin-bottom: 4px;
+}
+
+.dist-text {
+    font-size: 0.9rem;
+    color: #aaa;
+    font-family: monospace;
+}
+
+/* Expand Prompt (Preview Only) */
+.expand-hint {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    background: rgba(0, 0, 0, 0.6);
+    padding: 4px;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 10px;
+    z-index: 1001;
+    pointer-events: none;
+    opacity: 0.8;
+    transition: opacity 0.2s;
+}
+
+.map-preview-container.fullscreen .expand-hint {
+    display: none;
+}
+
+/* Pulse animation for active navigation */
+@keyframes nav-pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.4);
+    }
+
+    70% {
+        box-shadow: 0 0 0 10px rgba(0, 229, 255, 0);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 rgba(0, 229, 255, 0);
+    }
+}
+
+.map-preview-container.navigating {
+    border-color: rgba(0, 229, 255, 0.5);
+    animation: nav-pulse 2s infinite;
+}

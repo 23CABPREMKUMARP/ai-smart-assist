@@ -1,0 +1,56 @@
+
+.navigation-overlay {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 200px;
+    height: 200px;
+    border-radius: 15px;
+    overflow: hidden;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.8);
+    border: 2px solid var(--primary);
+    box-shadow: 0 0 15px var(--primary);
+    transition: all 0.3s ease;
+}
+
+.navigation-overlay.active {
+    width: 250px;
+    height: 350px;
+}
+
+.nav-status {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.9);
+    color: #fff;
+    font-size: 0.8rem;
+    font-weight: bold;
+    text-align: center;
+    border-top: 1px solid var(--primary);
+}
+
+.nav-instruction {
+    font-size: 1rem;
+    color: var(--primary);
+    margin-bottom: 5px;
+}
+
+.nav-distance {
+    font-size: 0.9rem;
+    color: #ccc;
+}
+
+.speech-status {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    font-size: 0.7rem;
+    color: var(--warning);
+    background: rgba(0,0,0,0.5);
+    padding: 2px 5px;
+    border-radius: 4px;
+}
