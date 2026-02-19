@@ -12,9 +12,9 @@
  */
 
 export class ContinuousDetectionController {
-    constructor(detectionFn, intervalMs = 100) {
+    constructor(detectionFn, targetFps = 30) {
         this.detectionFn = detectionFn;
-        this.intervalMs = intervalMs;
+        this.frameInterval = 1000 / targetFps; // Target ~33ms for 30 FPS
         this.isRunning = false;
         this.lastTime = 0;
         this.requestId = null;
@@ -23,8 +23,9 @@ export class ContinuousDetectionController {
     start() {
         if (this.isRunning) return;
         this.isRunning = true;
+        this.lastTime = performance.now();
         this.loop();
-        console.log("Continuous Detection Loop Started");
+        console.log("Continuous Detection Loop Started at " + (1000 / this.frameInterval) + " FPS target");
     }
 
     stop() {
@@ -42,22 +43,20 @@ export class ContinuousDetectionController {
         const now = performance.now();
         const delta = now - this.lastTime;
 
-        if (delta >= this.intervalMs) {
-            this.lastTime = now - (delta % this.intervalMs);
+        if (delta >= this.frameInterval) {
+            this.lastTime = now - (delta % this.frameInterval);
 
-            // Execute detection logic asynchronously
-            // This ensures the animation frame is released immediately to the browser
-            // keeping the UI smooth.
-            this.detectionFn().catch(err => {
-                console.warn("Detection Loop Warning:", err);
-            });
+            // Execute detection logic
+            // We do not await this to let the UI thread breathe, 
+            // but we ensure we don't stack calls if detection is slower than FPS
+            this.detectionFn();
         }
 
         this.requestId = requestAnimationFrame(this.loop);
     }
 
-    // Dynamic adjustment for high-performance mode
-    setTurboMode(enabled) {
-        this.intervalMs = enabled ? 50 : 200;
+    // Dynamic adjustment
+    setTargetFps(fps) {
+        this.frameInterval = 1000 / fps;
     }
 }

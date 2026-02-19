@@ -8,7 +8,6 @@ import { ContinuousDetectionController } from '../utils/ContinuousDetectionContr
 
 // --- CONFIGURATION ---
 const CONFIDENCE_THRESHOLD = 0.60; // Lowered slightly for prototype responsiveness
-const HISTORY_FRAMES = 3;
 
 // Classes worthy of "Emergency" priority if close
 const EMERGENCY_CLASSES = ['person', 'car', 'bus', 'truck', 'motorcycle'];
@@ -21,10 +20,9 @@ const CameraView = ({ lang, onIntroEnd }) => {
     const [debugMode, setDebugMode] = useState(false);
     const [stats, setStats] = useState({ fps: 0, count: 0 });
 
-    // Refs for optimization (no re-renders)
+    // Refs for optimization
     const langRef = useRef(lang);
-    const objectHistoryRef = useRef(new Map()); // Map<id, {class, bbox, framesSeen, lastSeen}>
-    const lastAnnouncedRef = useRef(new Map()); // Map<class, timestamp>
+    const lastSpeechTimeRef = useRef(0);
     const hasSpokenIntroRef = useRef(false);
 
     // Controller Ref
@@ -39,9 +37,10 @@ const CameraView = ({ lang, onIntroEnd }) => {
         const initAI = async () => {
             try {
                 await tf.ready();
-                // Attempt to set WebGL backend for performance
+                // Attempt WebGL for performance
                 try {
-                    if (tf.getBackend() !== 'webgl') {
+                    const currentBackend = tf.getBackend();
+                    if (currentBackend !== 'webgl') {
                         await tf.setBackend('webgl');
                     }
                 } catch (e) {
@@ -49,27 +48,19 @@ const CameraView = ({ lang, onIntroEnd }) => {
                     await tf.setBackend('cpu');
                 }
 
+                // Using lite_mobilenet_v2 for speed
                 const loadedModel = await cocossd.load({ base: 'lite_mobilenet_v2' });
                 setModel(loadedModel);
-
-                // Warmup
-                const zeroTensor = tf.zeros([1, 640, 480, 3], 'int32');
-                await loadedModel.detect(zeroTensor);
-                zeroTensor.dispose();
                 console.log("VisionAid AI Ready");
             } catch (err) {
                 console.error("AI Init Error:", err);
-
-                // Fallback retry with CPU if first attempt failed (likely due to WebGL or model load issues)
+                // Last ditch retry
                 try {
-                    console.log("Retrying with CPU backend...");
                     await tf.setBackend('cpu');
                     const loadedModel = await cocossd.load({ base: 'lite_mobilenet_v2' });
                     setModel(loadedModel);
-                    console.log("VisionAid AI Recovered with CPU");
                 } catch (retryErr) {
-                    console.error("AI Retry Failed:", retryErr);
-                    setCameraError(`AI System Failed: ${retryErr.message || err.message}`);
+                    setCameraError(`AI System Failed: ${retryErr.message}`);
                 }
             }
         };
@@ -86,22 +77,25 @@ const CameraView = ({ lang, onIntroEnd }) => {
         }
     }, [lang, model, onIntroEnd]);
 
-    // 3. CAMERA
+    // 3. CAMERA (Mobile Optimized)
     useEffect(() => {
         const startCam = async () => {
             if (!videoRef.current) return;
             try {
-                // Request 640x480 for MobileNet optimization
-                const stream = await navigator.mediaDevices.getUserMedia({
+                // Dynamic Resolution based on device capability
+                const isMobile = window.innerWidth < 768;
+                const constraints = {
                     video: {
                         facingMode: 'environment',
-                        width: { ideal: 640 },
-                        height: { ideal: 480 }
+                        width: { ideal: isMobile ? 640 : 1280 }, // Lower res on mobile for speed
+                        height: { ideal: isMobile ? 480 : 720 }
                     },
                     audio: false
-                });
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 videoRef.current.srcObject = stream;
-                // Wait for video to actually play to avoid 0x0 dims
+
                 videoRef.current.onloadedmetadata = () => {
                     videoRef.current.play().catch(e => console.error("Play error", e));
                 };
@@ -113,234 +107,134 @@ const CameraView = ({ lang, onIntroEnd }) => {
         startCam();
     }, []);
 
-    // 4. CORE LOGIC - CONTINUOUS DETECTION CALLBACK
+    // 4. CORE LOGIC - INSTANT CONTINUOUS DETECTION
     const performDetection = useCallback(async () => {
         if (!model || !videoRef.current || videoRef.current.readyState !== 4) return;
 
-        const now = Date.now();
+        const start = performance.now();
         const video = videoRef.current;
         const videoWidth = video.videoWidth;
         const videoHeight = video.videoHeight;
 
         // Ensure canvas match
         if (canvasRef.current) {
-            canvasRef.current.width = videoWidth;
-            canvasRef.current.height = videoHeight;
+            if (canvasRef.current.width !== videoWidth) canvasRef.current.width = videoWidth;
+            if (canvasRef.current.height !== videoHeight) canvasRef.current.height = videoHeight;
         }
 
         // --- A. DETECTION ---
         let predictions = [];
         try {
-            // Using max detections = 10 for performance
-            predictions = await model.detect(video, 10, CONFIDENCE_THRESHOLD);
+            // Detect ALL objects (no lock)
+            predictions = await model.detect(video, 20, CONFIDENCE_THRESHOLD);
         } catch (e) {
             console.warn("Detect Error", e);
             return;
         }
 
-        // --- B. TEMPORAL SMOOTHING & VALIDATION ---
-        const history = objectHistoryRef.current;
-        const confirmedObjects = [];
-
-        // 1. Mark all history as "not seen yet this frame"
-        for (let obj of history.values()) {
-            obj.seenThisFrame = false;
-        }
-
-        // 2. Match predictions to history
-        predictions.forEach(pred => {
-            const { class: label, bbox, score } = pred;
-            const [x, y, w, h] = bbox;
-            const centerX = x + w / 2;
-            const centerY = y + h / 2;
-
-            // Simple tracker: Look for same class with center close to previous
-            let matchFound = false;
-
-            for (let [id, obj] of history.entries()) {
-                if (obj.label === label && !obj.seenThisFrame) {
-                    const [ox, oy, ow, oh] = obj.bbox;
-                    const oCx = ox + ow / 2;
-                    const oCy = oy + oh / 2;
-
-                    // Box center diff
-                    const dist = Math.hypot(centerX - oCx, centerY - oCy);
-                    const diag = Math.hypot(videoWidth, videoHeight);
-
-                    // If moved less than 15% (increased for faster movements) of screen diagonal
-                    if (dist < diag * 0.15) {
-                        // Update object
-                        obj.bbox = [
-                            (ox + x) / 2, // Smooth X
-                            (oy + y) / 2, // Smooth Y
-                            (ow + w) / 2, // Smooth W
-                            (oh + h) / 2  // Smooth H
-                        ];
-                        obj.score = score;
-                        // Faster confidence build-up for prototype
-                        obj.framesSeen = Math.min(obj.framesSeen + 1, HISTORY_FRAMES + 2);
-                        obj.lastSeen = now;
-                        obj.seenThisFrame = true;
-                        matchFound = true;
-                        break;
-                    }
-                }
-            }
-
-            // New object found
-            if (!matchFound) {
-                const id = Math.random().toString(36).substr(2, 9);
-                history.set(id, {
-                    label,
-                    bbox,
-                    score,
-                    framesSeen: 1,
-                    lastSeen: now,
-                    seenThisFrame: true,
-                    announcedTime: 0
-                });
-            }
-        });
-
-        // 3. Prune old objects & Collect Confirmed
-        for (let [id, obj] of history.entries()) {
-            if (!obj.seenThisFrame) {
-                // Faster removal (300ms) for cleaner demo
-                if (now - obj.lastSeen > 300) {
-                    history.delete(id);
-                } else {
-                    obj.framesSeen = Math.max(0, obj.framesSeen - 1);
-                }
-            }
-
-            // CONFIRMATION RULE: Must be seen in at least 2 frames
-            if (obj.framesSeen >= 2) {
-                confirmedObjects.push(obj);
-            }
-        }
-
-        // --- C. DRAWING & VISUALS ---
+        // --- B. INSTANT RENDER & DATA UPDATE ---
+        // Clear previous frame data - User req: "Always clear previous frame data"
         const ctx = canvasRef.current.getContext('2d');
         ctx.clearRect(0, 0, videoWidth, videoHeight);
 
-        confirmedObjects.forEach(obj => {
-            const [x, y, w, h] = obj.bbox;
-            const isEmergency = EMERGENCY_CLASSES.includes(obj.label);
-            const color = isEmergency ? '#ef4444' : '#22c55e'; // Red vs Green
+        // Sort by Size (Priority: Closest/Largest first)
+        predictions.sort((a, b) => {
+            const areaA = a.bbox[2] * a.bbox[3];
+            const areaB = b.bbox[2] * b.bbox[3];
+            return areaB - areaA;
+        });
 
-            // Glow effect
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = color;
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 4;
-            ctx.strokeRect(x, y, w, h);
+        // Update shared store for Voice Search Module
+        // Map to include 'label' for compatibility
+        const storeData = predictions.map(p => ({ ...p, label: p.class }));
+        updateDetections(storeData);
+
+        // Draw and Process
+        const objectsForSpeech = [];
+
+        predictions.forEach(pred => {
+            const [x, y, w, h] = pred.bbox;
+            const label = pred.class;
+
+            // Visuals
+            const isEmergency = EMERGENCY_CLASSES.includes(label);
+            const color = isEmergency ? '#ef4444' : '#22c55e';
+
+            // Draw Box
             ctx.shadowBlur = 0;
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = color;
+            ctx.strokeRect(x, y, w, h);
 
-            // Box Label
+            // Draw Label
             ctx.fillStyle = color;
-            const name = translations[langRef.current][obj.label] || obj.label;
-            const text = `${name.toUpperCase()} ${(obj.score * 100).toFixed(0)}%`;
+            const localizedName = translations[langRef.current][label] || label;
+            const text = `${localizedName.toUpperCase()} ${(pred.score * 100).toFixed(0)}%`;
             const tm = ctx.measureText(text);
-            ctx.fillRect(x, y - 25, tm.width + 10, 25);
 
-            ctx.fillStyle = '#ffffff';
+            // Position label intelligently so it doesn't go off screen
+            let labelY = y - 24;
+            if (labelY < 0) labelY = y + h + 5;
+
+            ctx.fillRect(x, labelY, tm.width + 10, 24);
+            ctx.fillStyle = '#111'; // High contrast text
             ctx.font = 'bold 14px "Outfit", sans-serif';
-            ctx.fillText(text, x + 5, y - 7);
+            ctx.fillText(text, x + 5, labelY + 17);
+
+            // Prepare for speech logic
+            const centerX = x + w / 2;
+            let position = 'ahead'; // Default
+            if (centerX < videoWidth * 0.33) position = 'left';
+            else if (centerX > videoWidth * 0.66) position = 'right';
+
+            objectsForSpeech.push({ label, position, area: w * h });
         });
 
-        // --- D. INTELLIGENT AUDIO ANNOUNCER ---
+        // --- C. INTELLIGENT SEQUENTIAL SPEECH ---
+        const now = Date.now();
+        // Throttle speech to avoid chaos (every 3.5s approx unless scene changes drastically)
+        if (now - lastSpeechTimeRef.current > 3500 && objectsForSpeech.length > 0) {
 
-        // Push state for Shared Voice Module
-        try { updateDetections(confirmedObjects); } catch (e) { }
+            // Limit to top 3 objects to avoid long monologues
+            const topObjects = objectsForSpeech.slice(0, 3);
 
-        // 1. Analyze Groups
-        const objectsToAnnounce = [];
-        const frameArea = videoWidth * videoHeight;
-
-        confirmedObjects.forEach(obj => {
-            const [x, y, w, h] = obj.bbox;
-            const areaPct = (w * h) / frameArea;
-
-            let proximity = 'far';
-            let urgency = 'normal';
-
-            if (areaPct > 0.35) {
-                proximity = 'very-close';
-                urgency = 'high';
-            } else if (areaPct > 0.15) {
-                proximity = 'close';
-            }
-
-            // Shorter cooldown for Prototype Mode (2s -> 1.5s/3s)
-            const lastTime = lastAnnouncedRef.current.get(obj.label) || 0;
-            const cooldown = urgency === 'high' ? 1500 : 3000;
-
-            if (now - lastTime > cooldown) {
-                objectsToAnnounce.push({
-                    label: obj.label,
-                    urgency,
-                    proximity,
-                    areaPct
-                });
-            }
-        });
-
-        // 2. Sort & Prioritize
-        objectsToAnnounce.sort((a, b) => {
-            if (a.urgency === 'high' && b.urgency !== 'high') return -1;
-            if (b.urgency === 'high' && a.urgency !== 'high') return 1;
-            return b.areaPct - a.areaPct;
-        });
-
-        // 3. Construct Message
-        if (objectsToAnnounce.length > 0) {
-            const topObjects = objectsToAnnounce.slice(0, 3);
-            topObjects.forEach(o => lastAnnouncedRef.current.set(o.label, now));
-            const isTamil = langRef.current === 'ta';
-
-            if (topObjects.some(o => o.urgency === 'high')) {
-                const emergency = topObjects.find(o => o.urgency === 'high');
-                const name = translations[langRef.current][emergency.label] || emergency.label;
-                const text = isTamil
-                    ? `எச்சரிக்கை! ${name} மிக அருகில்.`
-                    : `Warning! ${name} very close.`;
-                speak(text, langRef.current, 'high');
-            } else {
-                const names = topObjects.map(o => translations[langRef.current][o.label] || o.label);
-                const uniqueNames = [...new Set(names)];
-                let text = '';
-
-                if (isTamil) {
-                    text = uniqueNames.length === 1
-                        ? `${uniqueNames[0]} உள்ளது.`
-                        : `${uniqueNames.join(', ')} தெரிகிறது.`;
+            // Construct sentence: "Person ahead. Chair on right."
+            const phrases = topObjects.map(obj => {
+                const name = translations[langRef.current][obj.label] || obj.label;
+                if (langRef.current === 'ta') {
+                    // Tamil phrasing
+                    if (obj.position === 'left') return `${name} இடதுபுறம்`;
+                    if (obj.position === 'right') return `${name} வலதுபுறம்`;
+                    return `${name} நேராக`;
                 } else {
-                    text = uniqueNames.length === 1
-                        ? `${uniqueNames[0]} detected.`
-                        : uniqueNames.join(', ') + ' detected.';
+                    // English phrasing
+                    if (obj.position === 'left') return `${name} on left`;
+                    if (obj.position === 'right') return `${name} on right`;
+                    return `${name} ahead`;
                 }
-                speak(text, langRef.current, 'normal');
-            }
+            });
+
+            const speechText = phrases.join('. ');
+            speak(speechText, langRef.current, 'normal');
+            lastSpeechTimeRef.current = now;
         }
 
-        // --- E. STATS ---
+        // Use the raw loop time to estimate FPS
+        const loopDuration = performance.now() - start;
         setStats({
-            fps: Math.round(1000 / (100)), // Approximate for demo
-            count: confirmedObjects.length
+            fps: Math.round(1000 / (Math.max(loopDuration, 16))), // Estimate
+            count: predictions.length
         });
 
-    }, [model]); // Detection logic only depends on presence of model
+    }, [model]);
 
     // 5. START / STOP CONTROLLER
     useEffect(() => {
         if (model) {
-            // Create Controller
-            // Base interval 100ms (10 FPS) for smooth UI + Detection balance
-            detectionControllerRef.current = new ContinuousDetectionController(performDetection, 100);
+            // Target 30 FPS for mobile/desktop balance, or 20 for pure stability
+            const targetFps = window.innerWidth < 768 ? 20 : 30;
 
-            // Enable Turbo Mode for Prototype (50ms interval / 20 FPS target)
-            detectionControllerRef.current.setTurboMode(true);
-
+            detectionControllerRef.current = new ContinuousDetectionController(performDetection, targetFps);
             detectionControllerRef.current.start();
         }
 
@@ -351,7 +245,7 @@ const CameraView = ({ lang, onIntroEnd }) => {
         };
     }, [model, performDetection]);
 
-    // Debug Toggle
+    // Debug Mode Hook
     useEffect(() => {
         const h = (e) => { if (e.key === 'd') setDebugMode(prev => !prev); }
         window.addEventListener('keydown', h);
@@ -392,7 +286,8 @@ const CameraView = ({ lang, onIntroEnd }) => {
                     textAlign: 'center',
                     border: '1px solid var(--primary)',
                     background: 'rgba(0,0,0,0.85)',
-                    borderRadius: '20px'
+                    borderRadius: '20px',
+                    zIndex: 50
                 }}>
                     <div style={{ color: 'var(--primary)', marginBottom: '10px', fontSize: '1.2rem' }}>
                         INITIALIZING AI...
@@ -417,8 +312,8 @@ const CameraView = ({ lang, onIntroEnd }) => {
                     background: 'rgba(0,0,0,0.8)', color: '#0f0', padding: 10,
                     borderRadius: 5, fontFamily: 'monospace', fontSize: 12
                 }}>
-                    MODE: PROTOTYPE (TURBO)<br />
-                    Conf: {(CONFIDENCE_THRESHOLD * 100).toFixed(0)}%<br />
+                    MODE: INSTANT (NO LOCK)<br />
+                    FPS Target: {window.innerWidth < 768 ? 20 : 30}<br />
                     Objs: {stats.count}
                 </div>
             )}
