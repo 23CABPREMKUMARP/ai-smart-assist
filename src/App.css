@@ -1,1 +1,121 @@
-/* Cleared for custom styles in index.css */
+/* Main App Layout Structure */
+.app-container {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+    /* Fallback */
+    height: 100dvh;
+    /* Mobile friendly */
+    background: black;
+    overflow: hidden;
+}
+
+.camera-layer,
+.ui-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.camera-layer {
+    z-index: 1;
+}
+
+.ui-layer {
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 1.5rem;
+    pointer-events: none;
+    /* Allows clicks to pass through empty areas */
+}
+
+/* Enable pointer events on interactive children */
+.top-section,
+.bottom-section,
+.floating-element {
+    pointer-events: auto;
+}
+
+.top-section {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    z-index: 101;
+}
+
+.bottom-section {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    z-index: 101;
+}
+
+/* Floating Elements (Logo, Language Toggle) */
+.logo-container-mobile {
+    position: absolute;
+    top: 1rem;
+    right: 1.5rem;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+.lang-toggle-container {
+    position: absolute;
+    top: 6rem;
+    left: 1.5rem;
+    z-index: 100;
+}
+
+/* Responsive Status Indicators */
+.status-indicator {
+    padding: 0.75rem 1.25rem;
+    border-radius: 9999px;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--glass-border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.status-text {
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    color: white;
+}
+
+/* Mobile Optimizations */
+@media (max-width: 768px) {
+    .ui-layer {
+        padding: 1rem;
+    }
+
+    .logo-container-mobile {
+        top: 0.5rem;
+        right: 1rem;
+    }
+
+    .logo-img {
+        width: 100px;
+        height: 100px;
+    }
+
+    .lang-toggle-container {
+        top: auto;
+        bottom: 8rem;
+        /* Position above bottom controls */
+        left: 1rem;
+    }
+
+    .bottom-section {
+        gap: 1rem;
+    }
+}
